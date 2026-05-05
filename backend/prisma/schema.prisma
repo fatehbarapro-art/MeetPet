@@ -1,0 +1,72 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Team {
+  id             String    @id @default(cuid())
+  name           String
+  discordGuildId String?   @unique
+  blopLevel      Int       @default(1)
+  blopXp         Int       @default(0)
+  meetings       Meeting[]
+  createdAt      DateTime  @default(now())
+}
+
+model Meeting {
+  id                    String     @id @default(cuid())
+  title                 String
+  teamId                String
+  discordChannelId      String?
+  discordVoiceChannelId String?
+  startedAt             DateTime
+  endedAt               DateTime?
+  transcript            String?
+  summary               String?
+  durationMin           Int?
+  createdAt             DateTime   @default(now())
+  team                  Team       @relation(fields: [teamId], references: [id])
+  speakers              Speaker[]
+  actions               Action[]
+  blopState             BlopState?
+}
+
+model Speaker {
+  id            String  @id @default(cuid())
+  meetingId     String
+  discordUserId String?
+  name          String
+  talkPercent   Float
+  talkSeconds   Int     @default(0)
+  meeting       Meeting @relation(fields: [meetingId], references: [id])
+}
+
+model Action {
+  id          String    @id @default(cuid())
+  meetingId   String
+  text        String
+  assignee    String
+  deadline    DateTime?
+  status      String    @default("pending")
+  confidence  Float     @default(1.0)
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  meeting     Meeting   @relation(fields: [meetingId], references: [id])
+}
+
+model BlopState {
+  id        String  @id @default(cuid())
+  meetingId String  @unique
+  energy    Int
+  balance   Int
+  focus     Int
+  happiness Int
+  level     Int     @default(1)
+  mood      String
+  reason    String?
+  meeting   Meeting @relation(fields: [meetingId], references: [id])
+}

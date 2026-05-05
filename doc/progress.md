@@ -9,113 +9,126 @@
 ## État global
 
 ```
-Étape 1 — Scaffolding        : 🔴 Non démarré
-Étape 2 — Pipeline Audio     : 🔴 Non démarré
-Étape 3 — Intelligence MiniMax: 🔴 Non démarré
-Étape 4 — Blop Canvas        : 🔴 Non démarré
-Étape 5 — TTS Blop           : 🔴 Non démarré
-Étape 6 — UI + Discord CR    : 🔴 Non démarré
-Étape 7 — Polish + Submit    : 🔴 Non démarré
+Étape 1 — Scaffolding         : ✅ Terminé
+Étape 2 — Pipeline Audio      : ✅ Terminé
+Étape 3 — Intelligence MiniMax: ✅ Terminé
+Étape 4 — Blop Canvas         : ✅ Terminé
+Étape 5 — TTS Blop            : ✅ Terminé
+Étape 6 — UI + Discord CR     : 🟡 Partiel
+Étape 7 — Polish + Submit     : 🔴 Non démarré
 ```
 
 ---
 
 ## Étape 1 — Scaffolding & Infrastructure
 
-- [ ] GitHub repo public créé
-- [ ] LICENSE MIT ajoutée
-- [ ] README.md de base
-- [ ] `backend/` initialisé (npm init, tsconfig.json)
-- [ ] Dépendances backend installées (express, ws, prisma, discord.js, @discordjs/voice, openai, dotenv...)
-- [ ] `frontend/` créé via Vite
-- [ ] Tailwind configuré dans le frontend
-- [ ] Schéma Prisma écrit (`schema.prisma`)
-- [ ] `npx prisma db push` passe sans erreur
-- [ ] `.env.example` créé avec toutes les variables
-- [ ] Serveur Express démarré sur port 3000 (`npm run dev`)
-- [ ] WebSocket handler basique opérationnel
-- [ ] Bot Discord connecté et visible en ligne dans le serveur
-- [ ] Slash commands Discord enregistrées (dev guild)
-- [ ] `utils/minimax.ts` initialisé (OpenAI SDK → baseURL minimax.io)
-- [ ] `utils/groq.ts` initialisé (OpenAI SDK → baseURL groq.com)
+- [x] `backend/` initialisé — `package.json`, `tsconfig.json`
+- [x] Dépendances backend installées — `express`, `ws`, `prisma`, `discord.js`, `@discordjs/voice`, `openai`, `dotenv`, `prism-media`
+- [x] `frontend/` initialisé — Vite + React + TypeScript
+- [x] Tailwind v4 configuré (`@tailwindcss/vite`)
+- [x] Schéma Prisma écrit — `Team`, `Meeting`, `Speaker`, `Action`, `BlopState`
+- [x] `npx prisma db push` — SQLite `dev.db` créé et synchronisé
+- [x] `npx prisma generate` — client Prisma généré
+- [x] `.env.example` créé avec toutes les variables
+- [x] `backend/.env` créé (clés à remplir)
+- [x] Serveur Express + WebSocket — `server.ts` avec `broadcast()` exportée
+- [x] Routes REST — `GET /api/health`, `GET /api/meetings`, `GET /api/meetings/:id`, `PATCH /api/actions/:id`
+- [x] `utils/minimax.ts` — client OpenAI SDK → `api.minimax.io/v1`
+- [x] `utils/groq.ts` — client OpenAI SDK → `api.groq.com/openai/v1`
+- [x] TypeScript backend — `npx tsc --noEmit` ✅ 0 erreur
+- [x] TypeScript frontend — `npx tsc --noEmit` ✅ 0 erreur
+- [ ] GitHub repo public — à pousser (auth SSH en attente)
+- [ ] LICENSE MIT — à ajouter
+- [ ] Bot Discord connecté en ligne — clés `.env` à remplir
+- [ ] Slash commands Discord enregistrées — clés `.env` à remplir
 
 ---
 
 ## Étape 2 — Pipeline Audio Discord + Groq STT
 
-- [ ] `/meetpet start` → bot rejoint le voice channel
-- [ ] `AudioReceiveStream` par membre détecté (speaking.on('start'))
-- [ ] Décodage Opus → PCM via `OpusDecoder`
-- [ ] PCM → WAV → Groq Whisper STT → texte
-- [ ] Transcription broadcastée via WebSocket
-- [ ] `Transcript.tsx` affiche la transcription en temps réel
-- [ ] `SpeakerBars.tsx` se met à jour quand un speaker parle
-- [ ] `/meetpet stop` → bot quitte le vocal
-- [ ] Speakers sauvegardés en SQLite à la fin
+- [x] `discordBot.ts` — `/meetpet start` : bot rejoint le voice channel via `joinVoiceChannel`
+- [x] `AudioReceiveStream` par membre — `receiver.speaking.on('start', userId)`
+- [x] Décodage Opus → PCM — `prism.opus.Decoder({ frameSize: 960, channels: 1, rate: 48000 })`
+- [x] `pcmToWav()` — wrapping PCM en WAV 16kHz pour Groq
+- [x] `transcribeAudio()` — Groq Whisper `whisper-large-v3`, langue `fr`
+- [x] Transcription broadcastée — `broadcast({ type: 'transcript', ... })`
+- [x] `Transcript.tsx` — affiche les segments en temps réel, auto-scroll
+- [x] `SpeakerBars.tsx` — barres de temps de parole par speaker
+- [x] `/meetpet stop` — `getVoiceConnection(guildId)?.destroy()`
+- [x] `onSpeakerStart/End` — tracking secondes de parole par userId
+- [ ] Speakers persistés en SQLite à la fin — à implémenter dans `handleStop`
 
 ---
 
 ## Étape 3 — Intelligence MiniMax M2.7-highspeed
 
-- [ ] Buffer de transcription 30s opérationnel
-- [ ] Appel MiniMax M2.7-highspeed toutes les 30s avec le buffer
-- [ ] JSON parsé et validé (try/catch + retry si malformé)
-- [ ] Actions persistées en SQLite
-- [ ] Temps de parole calculé et persisté par speaker
-- [ ] Score Blop calculé (formule complète — voir blop.md)
-- [ ] `blop_update` broadcasté après chaque analyse
-- [ ] `action_detected` broadcasté pour chaque nouvelle action
-- [ ] `dominance_alert` broadcasté si un speaker > 5 min
-- [ ] Rule-based micro-events : new_speaker, silence, dominance (eventService.ts)
-- [ ] `ActionsList.tsx` affiche les actions avec statut
+- [x] `analyzeTranscript()` — appel MiniMax M2.7-highspeed, `response_format: json_object`, retry si malformé
+- [x] `runAnalysis()` — appelée toutes les 30s via `setInterval`
+- [x] JSON parsé — actions, speakingTime, dominanceAlert, blopMood
+- [x] Actions persistées en SQLite — `prisma.action.create()` si confidence ≥ 0.7
+- [x] `action_detected` broadcasté pour chaque nouvelle action
+- [x] `blop_update` broadcasté après chaque analyse
+- [x] `dominance_alert` broadcasté si un speaker dépasse le seuil
+- [x] `computeBlopState()` — formule complète (équilibre 40%, actions 30%, durée 15%, clarté 15%)
+- [x] `blopService.ts` — `moodFromScore()`, `defaultBlopState()`, `blopInterventionText()`
+- [x] `eventService.ts` — rule-based : `new_speaker` (+5 bonheur), `dominance` (check 15s), `silence` (-5)
+- [x] `ActionsList.tsx` — liste des actions avec icône statut (⏳/✅/🔴)
 
 ---
 
 ## Étape 4 — Blop Canvas
 
-- [ ] `BlopCanvas.tsx` avec boucle 60fps (`requestAnimationFrame`)
-- [ ] Corps ellipse + respiration sinusoïdale
-- [ ] Yeux + pupilles
-- [ ] Bouche arc Bézier (souriant ↔ triste)
-- [ ] Oreilles
-- [ ] Interpolation couleur selon mood
-- [ ] Animation saut (célébration)
-- [ ] Animation tremblement (stress)
-- [ ] Animation larme (action en retard)
-- [ ] `BlopStats.tsx` avec 4 barres (énergie, équilibre, focus, bonheur)
-- [ ] `BlopSpeech.tsx` bulle de dialogue animée
+- [x] `BlopCanvas.tsx` — boucle 60fps `requestAnimationFrame`
+- [x] Corps ellipse avec respiration sinusoïdale (bodyW/H oscillant)
+- [x] Yeux avec pupilles et blink aléatoire
+- [x] Mouvement yeux subtil selon le temps
+- [x] Bouche arc `quadraticCurveTo` — souriant si happiness > 50, triste si < 50
+- [x] Oreilles ellipses latérales
+- [x] Interpolation couleur RGB progressive entre moods (`lerpColor`)
+- [x] Animation saut — déclenché si happiness > 80 ou mood `euphoric`
+- [x] Animation tremblement — déclenché si happiness < 40
+- [x] Larme animée (tombe) si happiness < 40
+- [x] `BlopStats.tsx` — 4 barres (énergie/équilibre/focus/bonheur) avec couleurs distinctes
+- [x] `BlopSpeech.tsx` — bulle de dialogue avec flèche, animation bounce
 
 ---
 
 ## Étape 5 — TTS Blop (MiniMax speech-2.8-turbo)
 
-- [ ] Triggers d'intervention implémentés (monopolisation, retard, silence)
-- [ ] Templates de texte Blop prêts
-- [ ] MiniMax speech-2.8-turbo appelé → buffer MP3
-- [ ] Audio MP3 joué dans le vocal Discord via `createAudioPlayer`
-- [ ] `blop_speech` broadcasté → bulle affichée dans le frontend
-- [ ] Transcript enrichi avec interventions Blop (icône 🎙️)
+- [x] `synthesizeSpeech()` — appel `api.minimax.io/v1/t2a_v2`, retourne buffer MP3
+- [x] `blopSpeak()` — `createAudioPlayer` + `createAudioResource` → joué dans le vocal Discord
+- [x] Fallback si TTS échoue — broadcast texte uniquement, pas de crash
+- [x] `blop_speech` broadcasté — bulle dialogue frontend affichée 5s
+- [x] Trigger dominance — intervention si speaker > 5 min consécutives
+- [x] `blopInterventionText()` — templates : dominance, silence, overdue, celebration, end_fast
+- [x] Interventions Blop ajoutées au transcript — `{ speaker: '🎙️ Blop', ... }`
 
 ---
 
 ## Étape 6 — UI complète + Compte-rendu + Discord
 
-- [ ] Layout 3 colonnes complet (SpeakerBars | Blop | Transcript)
-- [ ] `Header.tsx` avec timer et statut EN COURS / TERMINÉE
-- [ ] `BottomBar.tsx` avec indicateur d'écoute et bouton Fin
-- [ ] Compte-rendu généré par MiniMax M2.7 en fin de réunion
-- [ ] `MeetingSummary.tsx` page compte-rendu
-- [ ] Embed Discord posté dans le channel texte
-- [ ] DMs Discord individuels envoyés à chaque participant
-- [ ] Dashboard historique (`Dashboard.tsx`)
+- [x] Layout 3 colonnes — `MeetingRoom.tsx` (SpeakerBars | Blop | Transcript)
+- [x] `Header.tsx` — timer en temps réel, indicateur EN COURS (pulse rouge)
+- [x] `BottomBar.tsx` — speaker actif avec indicateur vert, instruction `/meetpet stop`
+- [x] `App.tsx` — écran d'accueil si pas de réunion, bascule sur `MeetingRoom` à la connexion
+- [x] `store.ts` — Zustand : état global meetingId, transcript, actions, blopState, blopSpeech
+- [x] `useWebSocket.ts` — routing complet de tous les events WS
+- [x] `generateSummary()` — compte-rendu Markdown via MiniMax M2.7 en fin de réunion
+- [x] `buildSummaryEmbed()` — Embed Discord coloré selon mood Blop
+- [x] Embed posté dans le channel texte Discord à la fin
+- [ ] `MeetingSummary.tsx` — page web compte-rendu (route `/summary/:id`) — **à faire**
+- [ ] DMs Discord individuels par participant — **à faire**
+- [ ] `Dashboard.tsx` — historique des réunions — **à faire**
+- [ ] Speakers persistés en SQLite dans `handleStop` — **à faire**
 
 ---
 
 ## Étape 7 — Polish & Soumission
 
 - [ ] README.md complet (setup, usage, architecture)
-- [ ] `.env.example` à jour
-- [ ] Démo vidéo 3-5 min enregistrée
+- [ ] LICENSE MIT
+- [ ] `.env.example` à jour — ✅ déjà fait
+- [ ] Démo vidéo 3-5 min
 - [ ] Soumission sur create.gosim.org/submit
 - [ ] Pitch 2 min répété
 
@@ -123,13 +136,18 @@
 
 ## Notes de session
 
-### 2026-05-05
-- Architecture définie : Discord vocal + Groq Whisper STT + MiniMax M2.7 analyse + MiniMax TTS
-- Décisions :
-  - Discord remplace browser mic + Slack/Teams (diarisation native)
-  - Kimi éliminé (sponsor = MiniMax, pas Kimi)
-  - DeepSeek éliminé (RouteTokens non nécessaire)
-  - Groq Whisper remplace MiniMax STT (non documenté dans la doc MiniMax)
-  - Micro-events = rule-based local (0 API, 0 latence)
+### 2026-05-05 — Session 1 : Architecture & docs
+- Stack définie : Discord + Groq Whisper STT + MiniMax M2.7 + MiniMax TTS
+- Kimi et DeepSeek éliminés (sponsor = MiniMax uniquement)
+- Micro-events = rule-based (0 API)
 - Documentation complète créée dans `doc/`
-- Prochaine action : démarrer l'étape 1 (scaffolding)
+
+### 2026-05-05 — Session 2 : Scaffolding + code complet
+- Backend complet : server, discordBot, services, utils — 0 erreur TS
+- Frontend complet : App, MeetingRoom, Blop animé, store, WS — 0 erreur TS
+- Prisma DB synchronisée
+- **Clés à remplir dans `backend/.env` avant de tester :**
+  - `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_GUILD_ID`
+  - `MINIMAX_API_KEY`, `MINIMAX_GROUP_ID`
+  - `GROQ_API_KEY`
+- **Reste à coder :** `MeetingSummary.tsx`, `Dashboard.tsx`, DMs Discord, speakers SQLite
