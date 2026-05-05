@@ -145,7 +145,14 @@ async function handleStop(interaction: ChatInputCommandInteraction) {
   const durationMin = Math.round((Date.now() - session.startedAt) / 60000)
   const fullTranscript = session.transcript.map(s => `${s.speaker}: ${s.text}`).join('\n')
 
-  const summary = await generateSummary(fullTranscript, session.title, durationMin)
+  let summary = ''
+  try {
+    summary = await generateSummary(fullTranscript, session.title, durationMin)
+  } catch (err) {
+    console.error('generateSummary échoué :', err)
+    summary = `## ${session.title}\nCompte-rendu indisponible (erreur MiniMax).`
+  }
+
   const actions = await prisma.action.findMany({ where: { meetingId: session.id } })
 
   await prisma.meeting.update({
@@ -156,10 +163,14 @@ async function handleStop(interaction: ChatInputCommandInteraction) {
   const summaryUrl = `${process.env.VITE_API_URL?.replace('/api', '')}/summary/${session.id}`
   const embed = buildSummaryEmbed(session.title, durationMin, session.blopState, actions, summaryUrl)
 
-  const channel = interaction.channel as TextChannel
-  await channel.send({ embeds: [embed] })
-  broadcast({ type: 'meeting_ended', meetingId: session.id, summaryUrl })
+  try {
+    const channel = interaction.channel as TextChannel
+    await channel.send({ embeds: [embed] })
+  } catch (err) {
+    console.error('Envoi embed Discord échoué :', err)
+  }
 
+  broadcast({ type: 'meeting_ended', meetingId: session.id, summaryUrl })
   await interaction.editReply('✅ Réunion terminée ! Compte-rendu posté ci-dessus.')
 }
 

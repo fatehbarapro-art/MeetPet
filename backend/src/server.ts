@@ -5,6 +5,9 @@ import { WebSocketServer, WebSocket } from 'ws'
 import { PrismaClient } from '@prisma/client'
 import { initDiscordBot } from './integrations/discord/discordBot.js'
 
+process.on('unhandledRejection', (err) => console.error('⚠️ Unhandled rejection:', err))
+process.on('uncaughtException',  (err) => console.error('⚠️ Uncaught exception:', err))
+
 export const prisma = new PrismaClient()
 const app = express()
 app.use(express.json())
