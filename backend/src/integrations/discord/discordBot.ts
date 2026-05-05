@@ -4,6 +4,8 @@ import {
   ChatInputCommandInteraction,
   VoiceChannel,
   TextChannel,
+  PermissionFlagsBits,
+  GuildMember,
 } from 'discord.js'
 import {
   joinVoiceChannel,
@@ -30,6 +32,11 @@ import { prisma } from '../../server.js'
 import type { MeetingSession } from '../../types/index.js'
 import type { MeetingRuleEvent } from '../../services/eventService.js'
 
+const discordJsVersion = '14.26.4'
+const discordVoiceVersion = '0.18.0'
+const discordOpusVersion = '0.9.0'
+const sodiumNativeVersion = '4.3.3'
+
 export const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -40,6 +47,7 @@ export const client = new Client({
 
 // Session active par guild
 const sessions = new Map<string, MeetingSession>()
+let voiceAttemptSeq = 0
 
 export function getActiveMeetingSession(): MeetingSession | null {
   return sessions.values().next().value ?? null
@@ -48,8 +56,11 @@ export function getActiveMeetingSession(): MeetingSession | null {
 export async function initDiscordBot() {
   client.once('ready', async () => {
     console.log(`✅ Discord bot connecté : ${client.user?.tag}`)
+    logDiscordRuntime()
     await registerCommands()
   })
+
+  client.on('raw', packet => logVoiceGatewayPacket(packet))
 
   client.on('interactionCreate', async interaction => {
     if (!interaction.isChatInputCommand()) return
@@ -88,6 +99,9 @@ async function handleStart(interaction: ChatInputCommandInteraction) {
   }
 
   const title = interaction.options.getString('titre') ?? `Réunion ${new Date().toLocaleDateString('fr-FR')}`
+  const attemptId = nextVoiceAttemptId()
+
+  logVoicePreflight(attemptId, voiceChannel, member)
 
   const connection = joinVoiceChannel({
     channelId: voiceChannel.id,
@@ -99,12 +113,12 @@ async function handleStart(interaction: ChatInputCommandInteraction) {
     debug: true,
   })
 
-  logVoiceConnection(connection)
+  logVoiceConnection(attemptId, connection)
 
   try {
     await entersState(connection, VoiceConnectionStatus.Ready, 30_000)
   } catch (err) {
-    console.error(`❌ Connexion vocale jamais prête dans #${voiceChannel.name} :`, err)
+    console.error(`[voice:${attemptId}] ❌ Connexion vocale jamais prête dans #${voiceChannel.name} :`, err)
     connection.destroy()
     await interaction.editReply(
       `❌ Blop a rejoint **${voiceChannel.name}**, mais Discord Voice n'est pas passé en état prêt. ` +
@@ -113,7 +127,7 @@ async function handleStart(interaction: ChatInputCommandInteraction) {
     return
   }
 
-  console.log(`✅ Connexion vocale prête dans #${voiceChannel.name}`)
+  console.log(`[voice:${attemptId}] ✅ Connexion vocale prête dans #${voiceChannel.name}`)
 
   // Créer la réunion en DB
   let team = await prisma.team.findUnique({ where: { discordGuildId: guild.id } })
@@ -151,7 +165,7 @@ async function handleStart(interaction: ChatInputCommandInteraction) {
 
   sessions.set(guild.id, session)
 
-  startAudioPipeline(connection, voiceChannel, session)
+  startAudioPipeline(attemptId, connection, voiceChannel, session)
 
   // Analyse toutes les 30s
   session.analysisTimer = setInterval(() => runAnalysis(session, connection), 30_000)
@@ -250,23 +264,24 @@ async function respondInteractionError(interaction: ChatInputCommandInteraction)
 }
 
 function startAudioPipeline(
+  attemptId: string,
   connection: VoiceConnection,
   voiceChannel: VoiceChannel,
   session: MeetingSession
 ) {
   const receiver = connection.receiver
-  console.log(`👂 Pipeline audio prêt pour ${voiceChannel.members.size} membre(s) dans #${voiceChannel.name}`)
+  console.log(`[voice:${attemptId}] 👂 Pipeline audio prêt pour ${voiceChannel.members.size} membre(s) dans #${voiceChannel.name}`)
   broadcast({ type: 'blop_event', event: 'audio_ready', blopDelta: 0, message: `Audio prêt dans ${voiceChannel.name}.` })
 
   receiver.speaking.on('end', (userId: string) => {
     const displayName = session.speakerNames[userId] ?? userId
-    console.log(`🤐 ${displayName} arrête de parler`)
+    console.log(`[voice:${attemptId}] 🤐 ${displayName} arrête de parler`)
   })
 
   receiver.speaking.on('start', (userId: string) => {
     const member = voiceChannel.members.get(userId)
     const displayName = member?.displayName ?? userId
-    console.log(`🎙️ ${displayName} commence à parler`)
+    console.log(`[voice:${attemptId}] 🎙️ ${displayName} commence à parler`)
 
     onSpeakerStart(userId, displayName, session)
 
@@ -278,8 +293,8 @@ function startAudioPipeline(
     const chunks: Buffer[] = []
     const startTime = Date.now()
 
-    stream.on('error', err => console.error(`❌ Stream audio Discord erreur pour ${displayName} :`, err))
-    decoder.on('error', err => console.error(`❌ Decodeur Opus erreur pour ${displayName} :`, err))
+    stream.on('error', err => console.error(`[voice:${attemptId}] ❌ Stream audio Discord erreur pour ${displayName} :`, err))
+    decoder.on('error', err => console.error(`[voice:${attemptId}] ❌ Decodeur Opus erreur pour ${displayName} :`, err))
     stream.pipe(decoder)
     decoder.on('data', (chunk: Buffer) => chunks.push(chunk))
 
@@ -288,11 +303,11 @@ function startAudioPipeline(
       onSpeakerEnd(userId, seconds, session)
 
       const pcm = Buffer.concat(chunks)
-      console.log(`🔊 ${displayName} — ${seconds.toFixed(1)}s de son (${pcm.length} bytes PCM)`)
+      console.log(`[voice:${attemptId}] 🔊 ${displayName} — ${seconds.toFixed(1)}s de son (${pcm.length} bytes PCM)`)
 
       try {
         const { text } = await transcribeAudio(pcm, displayName)
-        console.log(`📝 Groq STT → "${text}"`)
+        console.log(`[voice:${attemptId}] 📝 Groq STT → "${text}"`)
         if (!text) return
 
         const segment = { speaker: displayName, text, timestamp: Date.now() }
@@ -300,18 +315,101 @@ function startAudioPipeline(
         session.lastSpeechAt = Date.now()
         broadcast({ type: 'transcript', ...segment })
       } catch (err) {
-        console.error(`❌ Groq STT erreur pour ${displayName} :`, err)
+        console.error(`[voice:${attemptId}] ❌ Groq STT erreur pour ${displayName} :`, err)
       }
     })
   })
 }
 
-function logVoiceConnection(connection: VoiceConnection) {
-  connection.on('debug', message => console.log(`🔎 Voice debug: ${message}`))
+function logVoiceConnection(attemptId: string, connection: VoiceConnection) {
+  connection.on('debug', message => console.log(`[voice:${attemptId}] 🔎 ${redactSecrets(message)}`))
   connection.on('stateChange', (oldState, newState) => {
-    console.log(`🔌 Voice ${oldState.status} → ${newState.status}`)
+    console.log(`[voice:${attemptId}] 🔌 Voice ${oldState.status} → ${newState.status}`)
   })
-  connection.on('error', err => console.error('❌ Connexion vocale Discord erreur :', err))
+  connection.on('error', err => console.error(`[voice:${attemptId}] ❌ Connexion vocale Discord erreur :`, err))
+}
+
+function nextVoiceAttemptId() {
+  voiceAttemptSeq += 1
+  return `${Date.now().toString(36)}-${voiceAttemptSeq}`
+}
+
+function logDiscordRuntime() {
+  console.log([
+    '🧪 Runtime Discord',
+    `node=${process.version}`,
+    `discord.js=${discordJsVersion}`,
+    `@discordjs/voice=${discordVoiceVersion}`,
+    `@discordjs/opus=${discordOpusVersion}`,
+    `sodium-native=${sodiumNativeVersion}`,
+  ].join(' | '))
+}
+
+function logVoicePreflight(
+  attemptId: string,
+  voiceChannel: VoiceChannel,
+  member: GuildMember
+) {
+  const botMember = voiceChannel.guild.members.me
+  const permissions = botMember ? voiceChannel.permissionsFor(botMember) : null
+  const userVoice = member.voice
+
+  console.log(`[voice:${attemptId}] 🧭 Preflight`, {
+    guildId: voiceChannel.guild.id,
+    channelId: voiceChannel.id,
+    channelName: voiceChannel.name,
+    channelType: voiceChannel.type,
+    rtcRegion: voiceChannel.rtcRegion,
+    joinable: voiceChannel.joinable,
+    speakable: voiceChannel.speakable,
+    membersInChannel: voiceChannel.members.map(channelMember => ({
+      id: channelMember.id,
+      bot: channelMember.user.bot,
+      displayName: channelMember.displayName,
+      voice: {
+        selfMute: channelMember.voice.selfMute,
+        selfDeaf: channelMember.voice.selfDeaf,
+        serverMute: channelMember.voice.serverMute,
+        serverDeaf: channelMember.voice.serverDeaf,
+      },
+    })),
+    commandUserVoice: {
+      channelId: userVoice.channelId,
+      selfMute: userVoice.selfMute,
+      selfDeaf: userVoice.selfDeaf,
+      serverMute: userVoice.serverMute,
+      serverDeaf: userVoice.serverDeaf,
+    },
+    botPermissions: permissions ? {
+      viewChannel: permissions.has(PermissionFlagsBits.ViewChannel),
+      connect: permissions.has(PermissionFlagsBits.Connect),
+      speak: permissions.has(PermissionFlagsBits.Speak),
+      useVAD: permissions.has(PermissionFlagsBits.UseVAD),
+      administrator: permissions.has(PermissionFlagsBits.Administrator),
+    } : null,
+  })
+}
+
+function logVoiceGatewayPacket(packet: unknown) {
+  if (!isGatewayPacket(packet)) return
+  if (packet.t !== 'VOICE_STATE_UPDATE' && packet.t !== 'VOICE_SERVER_UPDATE') return
+
+  const data = packet.d as Record<string, unknown>
+  const safeData = packet.t === 'VOICE_SERVER_UPDATE'
+    ? { ...data, token: data.token ? '[redacted]' : undefined }
+    : data
+
+  console.log(`📡 Gateway ${packet.t}`, safeData)
+}
+
+function isGatewayPacket(packet: unknown): packet is { t?: string; d?: unknown } {
+  return Boolean(packet && typeof packet === 'object' && 't' in packet)
+}
+
+function redactSecrets(message: string) {
+  return message
+    .replace(/"token":"[^"]+"/g, '"token":"[redacted]"')
+    .replace(/"session_id":"[^"]+"/g, '"session_id":"[redacted]"')
 }
 
 async function runAnalysis(session: MeetingSession, connection: VoiceConnection) {

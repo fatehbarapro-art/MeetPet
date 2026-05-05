@@ -116,11 +116,21 @@
 - `npm rebuild @discordjs/opus` exécuté avec accès réseau/cache ; vérification OK : `sodium-native ok`, `@discordjs/opus ok`
 - `@discordjs/voice` mis à jour en `0.18.0`, dernière version compatible Node 20 (`0.19.2` demande Node >= 22.12)
 - `discord.js` mis à jour en `14.26.4` pour aligner le gateway adapter Discord avec la version voice
+- Logs structurés ajoutés : runtime Discord, preflight permissions/channel/members, paquets gateway `VOICE_STATE_UPDATE` / `VOICE_SERVER_UPDATE`, debug `@discordjs/voice` avec tokens masqués
 
 **À valider :**
 - Vérifier que le bot a les permissions `View Channel`, `Connect` et `Speak` dans le salon vocal
 - Relancer `/meetpet start` et confirmer que le backend affiche `Connexion vocale prête`
 - Si le statut reste `signalling/connecting`, investiguer réseau/UDP Discord Voice ou dépendances natives `@discordjs/opus` / `sodium-native`
+
+**Stratégie de debug :**
+- Si `Preflight.botPermissions` montre `connect/speak=false`, corriger les permissions du salon vocal
+- Si `Gateway VOICE_STATE_UPDATE` n'arrive pas après `/meetpet start`, problème gateway/intent Discord ou bot pas réellement déplacé
+- Si `Gateway VOICE_SERVER_UPDATE` n'arrive pas, problème serveur vocal Discord ou permission/canal
+- Si `VOICE_*` arrivent mais que `Voice debug` ferme après `HELLO` avec `code: 6`, problème handshake voice gateway à isoler par serveur vierge, région vocale, version Node/lib ou environnement Discord
+- Si `Connexion vocale prête` arrive mais pas `commence à parler`, problème événement `speaking` / détection utilisateur
+- Si `commence à parler` arrive avec `0 bytes PCM`, problème stream audio Opus
+- Si bytes PCM arrivent mais `Groq STT` est vide/erreur, problème STT/API audio
 
 ---
 
