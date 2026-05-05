@@ -3,10 +3,14 @@ import express from 'express'
 import { createServer } from 'http'
 import { WebSocketServer, WebSocket } from 'ws'
 import { PrismaClient } from '@prisma/client'
-import { getActiveMeetingSession, initDiscordBot } from './integrations/discord/discordBot.js'
+import { getActiveMeetingSession, initDiscordBot, devBlopSpeak } from './integrations/discord/discordBot.js'
 
 process.on('unhandledRejection', (err) => console.error('⚠️ Unhandled rejection:', err))
 process.on('uncaughtException',  (err) => console.error('⚠️ Uncaught exception:', err))
+process.on('exit',    (code)   => console.error('🚪 process exit code=' + code))
+process.on('SIGTERM', ()       => console.error('🛑 SIGTERM received'))
+process.on('SIGHUP',  ()       => console.error('🛑 SIGHUP received'))
+process.on('SIGINT',  ()       => { console.error('🛑 SIGINT received'); process.exit(130) })
 
 export const prisma = new PrismaClient()
 const app = express()
@@ -94,6 +98,25 @@ app.get('/api/meetings/:id', async (req, res) => {
   })
   if (!meeting) { res.status(404).json({ error: 'Not found' }); return }
   res.json(meeting)
+})
+
+// Diagnostic dev : déclenche blopSpeak avec un texte arbitraire pour tester le pipeline TTS
+// sans attendre la boucle d'analyse MiniMax. Disponible uniquement hors prod.
+app.post('/api/dev/blop-say', async (req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    res.status(404).json({ error: 'not found' })
+    return
+  }
+  const text = typeof req.body?.text === 'string' && req.body.text.trim()
+    ? req.body.text.trim()
+    : 'Bonjour, ceci est un test du pipeline vocal de Blop.'
+  try {
+    const result = await devBlopSpeak(text)
+    res.status(result.ok ? 200 : 409).json(result)
+  } catch (err) {
+    console.error('dev/blop-say erreur :', err)
+    res.status(500).json({ error: String(err) })
+  }
 })
 
 app.patch('/api/actions/:id', async (req, res) => {

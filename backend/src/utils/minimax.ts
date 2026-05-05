@@ -87,11 +87,17 @@ Ton : professionnel mais direct. Mentionne Blop comme membre de l'équipe.`
 
 // --- EXPORTS ---
 
+// MiniMax-M2 émet parfois un bloc <think>...</think> avant la réponse JSON.
+// On le retire pour pouvoir parser le contenu.
+function stripReasoning(text: string): string {
+  return text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
+}
+
 export async function analyzeTranscript(transcript: string): Promise<MeetingAnalysis> {
   if (MOCK) return mockAnalysis(transcript)
 
   const response = await minimax!.chat.completions.create({
-    model: 'MiniMax-M2.7-highspeed',
+    model: 'MiniMax-M2',
     messages: [
       { role: 'system', content: ANALYSIS_PROMPT },
       { role: 'user', content: `Transcription :\n${transcript}` },
@@ -103,10 +109,10 @@ export async function analyzeTranscript(transcript: string): Promise<MeetingAnal
   })
 
   try {
-    return JSON.parse(response.choices[0].message.content!) as MeetingAnalysis
+    return JSON.parse(stripReasoning(response.choices[0].message.content!)) as MeetingAnalysis
   } catch {
     const retry = await minimax!.chat.completions.create({
-      model: 'MiniMax-M2.7-highspeed',
+      model: 'MiniMax-M2',
       messages: [
         { role: 'system', content: ANALYSIS_PROMPT + "\nRéponds UNIQUEMENT avec du JSON, rien d'autre." },
         { role: 'user', content: `Transcription :\n${transcript}` },
@@ -114,7 +120,7 @@ export async function analyzeTranscript(transcript: string): Promise<MeetingAnal
       temperature: 0,
       max_tokens: 1000,
     })
-    return JSON.parse(retry.choices[0].message.content!) as MeetingAnalysis
+    return JSON.parse(stripReasoning(retry.choices[0].message.content!)) as MeetingAnalysis
   }
 }
 
@@ -126,7 +132,7 @@ export async function generateSummary(
   if (MOCK) return mockSummary(title, durationMin)
 
   const response = await minimax!.chat.completions.create({
-    model: 'MiniMax-M2.7-highspeed',
+    model: 'MiniMax-M2',
     messages: [
       { role: 'system', content: SUMMARY_PROMPT },
       { role: 'user', content: `Titre : ${title}\nDurée : ${durationMin} minutes\n\nTranscription :\n${transcript}` },
@@ -134,7 +140,7 @@ export async function generateSummary(
     temperature: 0.3,
     max_tokens: 2000,
   })
-  return response.choices[0].message.content!
+  return stripReasoning(response.choices[0].message.content!)
 }
 
 export async function synthesizeSpeech(text: string): Promise<Buffer> {
@@ -143,32 +149,34 @@ export async function synthesizeSpeech(text: string): Promise<Buffer> {
     throw new Error('MOCK: pas de TTS sans clé MiniMax')
   }
 
-  const url = new URL('https://api.minimax.io/v1/t2a_v2')
-  if (process.env.MINIMAX_GROUP_ID) url.searchParams.set('GroupId', process.env.MINIMAX_GROUP_ID)
-
-  const response = await fetch(url, {
+  // Pas de paramètre GroupId : le token Bearer porte déjà le groupe.
+  // L'ajouter quand il ne correspond pas exactement déclenche `1004 token not match group`.
+  const response = await fetch('https://api.minimax.io/v1/t2a_v2', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${process.env.MINIMAX_API_KEY}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'speech-2.8-turbo',
+      model: 'speech-2.8-hd',
       text,
-      stream: false,
-      voice_setting: { voice_id: 'female-youthful', speed: 1.1, vol: 1.0, pitch: 2 },
-      audio_setting: { sample_rate: 32000, bitrate: 128000, format: 'mp3' },
+      voice_setting: { voice_id: process.env.MINIMAX_VOICE_ID ?? 'English_Aussie_Bloke', speed: 1.1, vol: 1.0, pitch: 2 },
+      audio_setting: { sample_rate: 32000, bitrate: 128000, format: 'mp3', channel: 1 },
+      output_format: 'hex',
     }),
   })
 
   const raw = await response.text()
-  let data: { data?: { audio?: string } }
+  let data: { data?: { audio?: string }, base_resp?: { status_code?: number; status_msg?: string } }
   try {
-    data = JSON.parse(raw) as { data?: { audio?: string } }
+    data = JSON.parse(raw)
   } catch {
     throw new Error(`MiniMax TTS: invalid JSON (${response.status}) ${raw.slice(0, 300)}`)
   }
 
+  if (data.base_resp && data.base_resp.status_code !== 0) {
+    throw new Error(`MiniMax TTS: ${JSON.stringify(data.base_resp)}`)
+  }
   if (!response.ok || !data.data?.audio) {
     throw new Error(`MiniMax TTS: no audio (${response.status}) ${raw.slice(0, 300)}`)
   }

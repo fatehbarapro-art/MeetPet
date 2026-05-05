@@ -22,7 +22,7 @@
 
 ---
 
-## BUG-002 — Transcription ne s'affiche pas en temps réel 🟡
+## BUG-002 — Transcription ne s'affiche pas en temps réel ✅
 **Symptôme :** Section "Transcription en direct" reste sur "En attente de la parole..." même quand on parle
 **Cause probable :** Pipeline audio Discord → Groq non déclenché. Pistes :
 - Le bot n'était peut-être pas dans le canal vocal au moment du test
@@ -38,7 +38,7 @@
 
 ---
 
-## BUG-003 — Blop ne parle pas 🟡
+## BUG-003 — Blop ne parle pas ✅
 **Symptôme :** Aucune intervention vocale de Blop dans le canal Discord
 **Cause probable :**
 - Le trigger `dominance` ne se déclenche qu'après 5 min de parole continue → pas atteint en test rapide
@@ -97,7 +97,7 @@
 
 ---
 
-## BUG-009 — Bot dans le vocal mais aucune transcription 🟡
+## BUG-009 — Bot dans le vocal mais aucune transcription ✅
 **Symptôme :** La réunion est visible côté frontend, mais le temps de parole reste "En attente..." et aucune discussion n'est transcrite.
 **Cause probable :** Le pipeline audio Discord n'était pas assez observable. Il fallait distinguer trois cas : connexion vocale pas encore prête, aucun event `speaking.start`, ou audio reçu mais STT Groq vide/erreur.
 
@@ -149,3 +149,16 @@
 - BUG-007 : accusé réception Discord immédiat sur les slash commands
 - BUG-008 : synchronisation de la réunion active à la connexion WebSocket
 - BUG-009 : attente connexion vocale Ready + logs audio Discord détaillés
+
+### 2026-05-05 — Voice end-to-end VALIDÉ
+- **BUG-009 fixé pour de bon** : `@discordjs/voice` 0.18 → 0.19.2 + `@snazzah/davey` (Discord exige voice gateway v8 + DAVE)
+- **`@discordjs/opus` 0.9.0 → 0.10.0** : 0.9.0 segfault sur certains paquets SILK avec Node 22 ABI 127 → process Node mourait silencieusement après le 1er paquet
+- **Décodeur stéréo + downmix mono** : Discord encode toujours en stéréo, `channels: 1` produisait du PCM corrompu
+- **BUG-002 confirmé fixé** : Groq Whisper retourne du français correct en live
+- **BUG-003 confirmé fixé** : Blop parle, audible dans Discord (testé via `POST /api/dev/blop-say`)
+- **MiniMax** :
+  - retrait du paramètre `GroupId` (cause `1004 token not match group` avec les Token Plan Keys)
+  - modèle chat `MiniMax-M2.7-highspeed` → `MiniMax-M2` (plan-compat)
+  - voix TTS `female-youthful` → `English_Aussie_Bloke` par défaut (configurable via `MINIMAX_VOICE_ID`)
+  - strip des balises `<think>...</think>` que MiniMax-M2 émet avant le JSON
+- Voir `doc/voice-investigation/REPRODUCE.md` pour reproduire sur une autre machine

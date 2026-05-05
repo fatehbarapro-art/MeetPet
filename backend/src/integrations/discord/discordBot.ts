@@ -6,6 +6,7 @@ import {
   TextChannel,
   PermissionFlagsBits,
   GuildMember,
+  MessageFlags,
 } from 'discord.js'
 import {
   joinVoiceChannel,
@@ -31,9 +32,15 @@ import { broadcast } from '../../server.js'
 import { prisma } from '../../server.js'
 import type { MeetingSession } from '../../types/index.js'
 import type { MeetingRuleEvent } from '../../services/eventService.js'
+import {
+  logDependencyReport,
+  downmixStereoToMono,
+  parseVoiceWsOp,
+  describeAudioMagic,
+} from './voiceDiagnostics.js'
 
 const discordJsVersion = '14.26.4'
-const discordVoiceVersion = '0.18.0'
+const discordVoiceVersion = '0.19.2'
 const discordOpusVersion = '0.9.0'
 const sodiumNativeVersion = '4.3.3'
 
@@ -57,6 +64,7 @@ export async function initDiscordBot() {
   client.once('ready', async () => {
     console.log(`✅ Discord bot connecté : ${client.user?.tag}`)
     logDiscordRuntime()
+    logDependencyReport()
     await registerCommands()
   })
 
@@ -221,7 +229,7 @@ async function handleStop(interaction: ChatInputCommandInteraction) {
 }
 
 async function handleStatus(interaction: ChatInputCommandInteraction) {
-  await interaction.deferReply({ ephemeral: true })
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral })
 
   const session = sessions.get(interaction.guildId!)
   if (!session) {
@@ -233,7 +241,7 @@ async function handleStatus(interaction: ChatInputCommandInteraction) {
 }
 
 async function handleActions(interaction: ChatInputCommandInteraction) {
-  await interaction.deferReply({ ephemeral: true })
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral })
 
   const session = sessions.get(interaction.guildId!)
   if (!session) {
@@ -257,7 +265,7 @@ async function respondInteractionError(interaction: ChatInputCommandInteraction)
       await interaction.editReply(content)
       return
     }
-    await interaction.reply({ content, ephemeral: true })
+    await interaction.reply({ content, flags: MessageFlags.Ephemeral })
   } catch (err) {
     console.error('Impossible de répondre à l\'interaction Discord :', err)
   }
@@ -289,24 +297,47 @@ function startAudioPipeline(
       end: { behavior: EndBehaviorType.AfterSilence, duration: 500 },
     })
 
-    const decoder = new prism.opus.Decoder({ frameSize: 960, channels: 1, rate: 48000 })
+    // Discord encode toujours en stéréo 48kHz. On décode stéréo puis on downmix.
+    const decoder = new prism.opus.Decoder({ frameSize: 960, channels: 2, rate: 48000 })
     const chunks: Buffer[] = []
     const startTime = Date.now()
+    let opusBytes = 0
+    let firstOpusLogged = false
+    let firstPcmLogged = false
 
     stream.on('error', err => console.error(`[voice:${attemptId}] ❌ Stream audio Discord erreur pour ${displayName} :`, err))
+    stream.on('data', (chunk: Buffer) => {
+      opusBytes += chunk.length
+      if (!firstOpusLogged) {
+        firstOpusLogged = true
+        console.log(`[voice:${attemptId}] 📦 Premier paquet Opus ${displayName} : ${chunk.length}B head=${chunk.subarray(0, 4).toString('hex')}`)
+      }
+    })
     decoder.on('error', err => console.error(`[voice:${attemptId}] ❌ Decodeur Opus erreur pour ${displayName} :`, err))
     stream.pipe(decoder)
-    decoder.on('data', (chunk: Buffer) => chunks.push(chunk))
+    decoder.on('data', (chunk: Buffer) => {
+      chunks.push(chunk)
+      if (!firstPcmLogged) {
+        firstPcmLogged = true
+        console.log(`[voice:${attemptId}] 🔉 Premier PCM décodé ${displayName} : ${chunk.length}B (stéréo 48k)`)
+      }
+    })
 
     stream.on('end', async () => {
       const seconds = (Date.now() - startTime) / 1000
       onSpeakerEnd(userId, seconds, session)
 
-      const pcm = Buffer.concat(chunks)
-      console.log(`[voice:${attemptId}] 🔊 ${displayName} — ${seconds.toFixed(1)}s de son (${pcm.length} bytes PCM)`)
+      const pcmStereo = Buffer.concat(chunks)
+      const pcmMono = downmixStereoToMono(pcmStereo)
+      console.log(`[voice:${attemptId}] 🔊 ${displayName} — ${seconds.toFixed(1)}s opus=${opusBytes}B stéréo=${pcmStereo.length}B mono=${pcmMono.length}B`)
+
+      if (pcmMono.length === 0) {
+        console.warn(`[voice:${attemptId}] ⚠️ PCM vide pour ${displayName} — probablement aucun paquet RTP reçu`)
+        return
+      }
 
       try {
-        const { text } = await transcribeAudio(pcm, displayName)
+        const { text } = await transcribeAudio(pcmMono, displayName)
         console.log(`[voice:${attemptId}] 📝 Groq STT → "${text}"`)
         if (!text) return
 
@@ -322,7 +353,13 @@ function startAudioPipeline(
 }
 
 function logVoiceConnection(attemptId: string, connection: VoiceConnection) {
-  connection.on('debug', message => console.log(`[voice:${attemptId}] 🔎 ${redactSecrets(message)}`))
+  connection.on('debug', message => {
+    const opInfo = parseVoiceWsOp(message)
+    if (opInfo) {
+      console.log(`[voice:${attemptId}] 📨 GW ${opInfo.direction} op=${opInfo.op}${opInfo.op === 5 ? ' (Speaking)' : opInfo.op === 13 ? ' (ClientDisconnect)' : ''}`)
+    }
+    console.log(`[voice:${attemptId}] 🔎 ${redactSecrets(message)}`)
+  })
   connection.on('stateChange', (oldState, newState) => {
     console.log(`[voice:${attemptId}] 🔌 Voice ${oldState.status} → ${newState.status}`)
   })
@@ -484,12 +521,33 @@ async function blopSpeak(
   trigger: string
 ) {
   try {
+    console.log(`[blopSpeak] 🗣️ trigger=${trigger} text="${text}"`)
     const mp3 = await synthesizeSpeech(text)
+    console.log(`[blopSpeak] 🎵 audio=${mp3.length}B magic=${describeAudioMagic(mp3)}`)
+
     const player = createAudioPlayer()
-    const resource = createAudioResource(Readable.from(mp3), { inputType: StreamType.Arbitrary })
-    connection.subscribe(player)
+    player.on('error', err => console.error('[blopSpeak] ❌ AudioPlayer error :', err))
+    player.on('stateChange', (oldS, newS) => {
+      console.log(`[blopSpeak] 🎚️ player ${oldS.status} → ${newS.status}`)
+    })
+
+    const resource = createAudioResource(Readable.from(mp3), { inputType: StreamType.Arbitrary, inlineVolume: false })
+    const subscription = connection.subscribe(player)
+    if (!subscription) {
+      console.warn('[blopSpeak] ⚠️ connection.subscribe() a renvoyé undefined — la voice connection n\'est peut-être pas Ready')
+    }
     player.play(resource)
-    await new Promise<void>(resolve => player.on(AudioPlayerStatus.Idle, () => resolve()))
+
+    try {
+      await entersState(player, AudioPlayerStatus.Playing, 5_000)
+      console.log('[blopSpeak] ▶️ Playing')
+    } catch (err) {
+      console.error('[blopSpeak] ❌ Player jamais passé en Playing en 5s — ffmpeg ou MP3 invalide ?', err)
+      throw err
+    }
+
+    await entersState(player, AudioPlayerStatus.Idle, 30_000)
+    console.log('[blopSpeak] ⏹️ Idle (lecture terminée)')
   } catch (err) {
     // Fallback : on broadcast quand même
     console.error('TTS échoué, fallback texte :', err)
@@ -497,6 +555,16 @@ async function blopSpeak(
 
   broadcast({ type: 'blop_speech', text, trigger })
   session.transcript.push({ speaker: '🎙️ Blop', text, timestamp: Date.now() })
+}
+
+// Exposé pour l'endpoint dev /api/dev/blop-say
+export async function devBlopSpeak(text: string): Promise<{ ok: boolean; reason?: string }> {
+  const session = getActiveMeetingSession()
+  if (!session) return { ok: false, reason: 'no active session' }
+  const connection = getVoiceConnection(session.guildId)
+  if (!connection) return { ok: false, reason: 'no voice connection' }
+  await blopSpeak(connection, text, session, 'dev')
+  return { ok: true }
 }
 
 async function persistCompletedSession(
