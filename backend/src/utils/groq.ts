@@ -6,7 +6,9 @@ const groq = new OpenAI({
   baseURL: 'https://api.groq.com/openai/v1',
 })
 
-function pcmToWav(pcm: Buffer, sampleRate = 16000): Buffer {
+const DISCORD_PCM_SAMPLE_RATE = 48000
+
+function pcmToWav(pcm: Buffer, sampleRate = DISCORD_PCM_SAMPLE_RATE): Buffer {
   const numChannels = 1
   const bitsPerSample = 16
   const byteRate = (sampleRate * numChannels * bitsPerSample) / 8
@@ -35,8 +37,8 @@ export async function transcribeAudio(
   pcmBuffer: Buffer,
   speakerName: string
 ): Promise<{ text: string; speaker: string }> {
-  if (pcmBuffer.length < 3200) {
-    // Moins de 100ms de son → trop court, ignorer
+  if (pcmBuffer.length < (DISCORD_PCM_SAMPLE_RATE * 2) / 10) {
+    // Trop court pour Whisper apres decodage Discord.
     return { text: '', speaker: speakerName }
   }
 

@@ -143,7 +143,10 @@ export async function synthesizeSpeech(text: string): Promise<Buffer> {
     throw new Error('MOCK: pas de TTS sans clé MiniMax')
   }
 
-  const response = await fetch('https://api.minimax.io/v1/t2a_v2', {
+  const url = new URL('https://api.minimax.io/v1/t2a_v2')
+  if (process.env.MINIMAX_GROUP_ID) url.searchParams.set('GroupId', process.env.MINIMAX_GROUP_ID)
+
+  const response = await fetch(url, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${process.env.MINIMAX_API_KEY}`,
@@ -158,7 +161,17 @@ export async function synthesizeSpeech(text: string): Promise<Buffer> {
     }),
   })
 
-  const data = await response.json() as { data?: { audio?: string } }
-  if (!data.data?.audio) throw new Error('MiniMax TTS: no audio in response')
+  const raw = await response.text()
+  let data: { data?: { audio?: string } }
+  try {
+    data = JSON.parse(raw) as { data?: { audio?: string } }
+  } catch {
+    throw new Error(`MiniMax TTS: invalid JSON (${response.status}) ${raw.slice(0, 300)}`)
+  }
+
+  if (!response.ok || !data.data?.audio) {
+    throw new Error(`MiniMax TTS: no audio (${response.status}) ${raw.slice(0, 300)}`)
+  }
+
   return Buffer.from(data.data.audio, 'hex')
 }

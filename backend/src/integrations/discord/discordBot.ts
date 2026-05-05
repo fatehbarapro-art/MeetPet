@@ -14,6 +14,8 @@ import {
   StreamType,
   AudioPlayerStatus,
   VoiceConnection,
+  VoiceConnectionStatus,
+  entersState,
 } from '@discordjs/voice'
 import prism from 'prism-media'
 import { Readable } from 'stream'
@@ -26,6 +28,7 @@ import { computeBlopState, defaultBlopState, blopInterventionText } from '../../
 import { broadcast } from '../../server.js'
 import { prisma } from '../../server.js'
 import type { MeetingSession } from '../../types/index.js'
+import type { MeetingRuleEvent } from '../../services/eventService.js'
 
 export const client = new Client({
   intents: [
@@ -38,6 +41,10 @@ export const client = new Client({
 // Session active par guild
 const sessions = new Map<string, MeetingSession>()
 
+export function getActiveMeetingSession(): MeetingSession | null {
+  return sessions.values().next().value ?? null
+}
+
 export async function initDiscordBot() {
   client.once('ready', async () => {
     console.log(`✅ Discord bot connecté : ${client.user?.tag}`)
@@ -49,33 +56,64 @@ export async function initDiscordBot() {
     const cmd = interaction as ChatInputCommandInteraction
     if (cmd.commandName !== 'meetpet') return
 
-    const sub = cmd.options.getSubcommand()
-    if (sub === 'start') await handleStart(cmd)
-    else if (sub === 'stop') await handleStop(cmd)
-    else if (sub === 'status') await handleStatus(cmd)
-    else if (sub === 'actions') await handleActions(cmd)
+    try {
+      const sub = cmd.options.getSubcommand()
+      if (sub === 'start') await handleStart(cmd)
+      else if (sub === 'stop') await handleStop(cmd)
+      else if (sub === 'status') await handleStatus(cmd)
+      else if (sub === 'actions') await handleActions(cmd)
+    } catch (err) {
+      console.error('Commande /meetpet échouée :', err)
+      await respondInteractionError(cmd)
+    }
   })
 
   await client.login(process.env.DISCORD_BOT_TOKEN)
 }
 
 async function handleStart(interaction: ChatInputCommandInteraction) {
+  await interaction.deferReply()
+
   const guild = interaction.guild!
   const member = await guild.members.fetch(interaction.user.id)
   const voiceChannel = member.voice.channel as VoiceChannel | null
 
   if (!voiceChannel) {
-    await interaction.reply({ content: '❌ Rejoins un canal vocal d\'abord.', ephemeral: true })
+    await interaction.editReply('❌ Rejoins un canal vocal d\'abord.')
     return
   }
   if (sessions.has(guild.id)) {
-    await interaction.reply({ content: '⚠️ Une réunion est déjà en cours.', ephemeral: true })
+    await interaction.editReply('⚠️ Une réunion est déjà en cours.')
     return
   }
 
-  await interaction.deferReply()
-
   const title = interaction.options.getString('titre') ?? `Réunion ${new Date().toLocaleDateString('fr-FR')}`
+
+  const connection = joinVoiceChannel({
+    channelId: voiceChannel.id,
+    guildId: guild.id,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    adapterCreator: guild.voiceAdapterCreator as any,
+    selfDeaf: false,
+    selfMute: false,
+    debug: true,
+  })
+
+  logVoiceConnection(connection)
+
+  try {
+    await entersState(connection, VoiceConnectionStatus.Ready, 30_000)
+  } catch (err) {
+    console.error(`❌ Connexion vocale jamais prête dans #${voiceChannel.name} :`, err)
+    connection.destroy()
+    await interaction.editReply(
+      `❌ Blop a rejoint **${voiceChannel.name}**, mais Discord Voice n'est pas passé en état prêt. ` +
+      'Vérifie les permissions vocales du bot et relance `/meetpet start`.'
+    )
+    return
+  }
+
+  console.log(`✅ Connexion vocale prête dans #${voiceChannel.name}`)
 
   // Créer la réunion en DB
   let team = await prisma.team.findUnique({ where: { discordGuildId: guild.id } })
@@ -101,28 +139,23 @@ async function handleStart(interaction: ChatInputCommandInteraction) {
     startedAt: Date.now(),
     transcript: [],
     speakerSeconds: {},
+    speakerNames: {},
     knownSpeakers: new Set(),
     activeSpeaker: null,
     activeSpeakerStart: null,
+    lastDominanceAlertAt: null,
+    lastSilenceAlertAt: null,
     lastSpeechAt: Date.now(),
     blopState: defaultBlopState(),
   }
 
   sessions.set(guild.id, session)
 
-  const connection = joinVoiceChannel({
-    channelId: voiceChannel.id,
-    guildId: guild.id,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    adapterCreator: guild.voiceAdapterCreator as any,
-    selfDeaf: false,
-  })
-
   startAudioPipeline(connection, voiceChannel, session)
 
   // Analyse toutes les 30s
   session.analysisTimer = setInterval(() => runAnalysis(session, connection), 30_000)
-  startEventLoop(session)
+  session.eventTimer = startEventLoop(session, event => handleMeetingRuleEvent(event, connection, session))
 
   broadcast({ type: 'meeting_started', meetingId: meeting.id, title, participants: [] })
 
@@ -130,15 +163,17 @@ async function handleStart(interaction: ChatInputCommandInteraction) {
 }
 
 async function handleStop(interaction: ChatInputCommandInteraction) {
+  await interaction.deferReply()
+
   const guildId = interaction.guildId!
   const session = sessions.get(guildId)
   if (!session) {
-    await interaction.reply({ content: '❌ Aucune réunion en cours.', ephemeral: true })
+    await interaction.editReply('❌ Aucune réunion en cours.')
     return
   }
 
-  await interaction.deferReply()
   clearInterval(session.analysisTimer)
+  clearInterval(session.eventTimer)
   getVoiceConnection(guildId)?.destroy()
   sessions.delete(guildId)
 
@@ -155,10 +190,7 @@ async function handleStop(interaction: ChatInputCommandInteraction) {
 
   const actions = await prisma.action.findMany({ where: { meetingId: session.id } })
 
-  await prisma.meeting.update({
-    where: { id: session.id },
-    data: { endedAt: new Date(), summary, durationMin },
-  })
+  await persistCompletedSession(session, summary, durationMin)
 
   const summaryUrl = `${process.env.FRONTEND_URL ?? 'http://localhost:5173'}/summary/${session.id}`
   const embed = buildSummaryEmbed(session.title, durationMin, session.blopState, actions, summaryUrl)
@@ -175,31 +207,46 @@ async function handleStop(interaction: ChatInputCommandInteraction) {
 }
 
 async function handleStatus(interaction: ChatInputCommandInteraction) {
+  await interaction.deferReply({ ephemeral: true })
+
   const session = sessions.get(interaction.guildId!)
   if (!session) {
-    await interaction.reply({ content: 'Aucune réunion en cours.', ephemeral: true })
+    await interaction.editReply('Aucune réunion en cours.')
     return
   }
   const s = session.blopState
-  await interaction.reply({
-    content: `🐾 **Blop** — ${s.mood} (${s.happiness}/100)\nÉnergie ${s.energy} | Équilibre ${s.balance} | Focus ${s.focus}\n_${s.reason ?? 'Tout va bien'}_`,
-    ephemeral: true,
-  })
+  await interaction.editReply(`🐾 **Blop** — ${s.mood} (${s.happiness}/100)\nÉnergie ${s.energy} | Équilibre ${s.balance} | Focus ${s.focus}\n_${s.reason ?? 'Tout va bien'}_`)
 }
 
 async function handleActions(interaction: ChatInputCommandInteraction) {
+  await interaction.deferReply({ ephemeral: true })
+
   const session = sessions.get(interaction.guildId!)
   if (!session) {
-    await interaction.reply({ content: 'Aucune réunion en cours.', ephemeral: true })
+    await interaction.editReply('Aucune réunion en cours.')
     return
   }
   const actions = await prisma.action.findMany({ where: { meetingId: session.id, status: 'pending' } })
   if (actions.length === 0) {
-    await interaction.reply({ content: 'Aucune action détectée pour le moment.', ephemeral: true })
+    await interaction.editReply('Aucune action détectée pour le moment.')
     return
   }
   const list = actions.map(a => `⏳ **${a.assignee}** : ${a.text}`).join('\n')
-  await interaction.reply({ content: `📌 **Actions en attente :**\n${list}`, ephemeral: true })
+  await interaction.editReply(`📌 **Actions en attente :**\n${list}`)
+}
+
+async function respondInteractionError(interaction: ChatInputCommandInteraction) {
+  const content = '❌ MeetPet a rencontré une erreur côté serveur. Regarde le terminal backend pour le détail.'
+
+  try {
+    if (interaction.deferred || interaction.replied) {
+      await interaction.editReply(content)
+      return
+    }
+    await interaction.reply({ content, ephemeral: true })
+  } catch (err) {
+    console.error('Impossible de répondre à l\'interaction Discord :', err)
+  }
 }
 
 function startAudioPipeline(
@@ -208,6 +255,13 @@ function startAudioPipeline(
   session: MeetingSession
 ) {
   const receiver = connection.receiver
+  console.log(`👂 Pipeline audio prêt pour ${voiceChannel.members.size} membre(s) dans #${voiceChannel.name}`)
+  broadcast({ type: 'blop_event', event: 'audio_ready', blopDelta: 0, message: `Audio prêt dans ${voiceChannel.name}.` })
+
+  receiver.speaking.on('end', (userId: string) => {
+    const displayName = session.speakerNames[userId] ?? userId
+    console.log(`🤐 ${displayName} arrête de parler`)
+  })
 
   receiver.speaking.on('start', (userId: string) => {
     const member = voiceChannel.members.get(userId)
@@ -224,6 +278,8 @@ function startAudioPipeline(
     const chunks: Buffer[] = []
     const startTime = Date.now()
 
+    stream.on('error', err => console.error(`❌ Stream audio Discord erreur pour ${displayName} :`, err))
+    decoder.on('error', err => console.error(`❌ Decodeur Opus erreur pour ${displayName} :`, err))
     stream.pipe(decoder)
     decoder.on('data', (chunk: Buffer) => chunks.push(chunk))
 
@@ -248,6 +304,14 @@ function startAudioPipeline(
       }
     })
   })
+}
+
+function logVoiceConnection(connection: VoiceConnection) {
+  connection.on('debug', message => console.log(`🔎 Voice debug: ${message}`))
+  connection.on('stateChange', (oldState, newState) => {
+    console.log(`🔌 Voice ${oldState.status} → ${newState.status}`)
+  })
+  connection.on('error', err => console.error('❌ Connexion vocale Discord erreur :', err))
 }
 
 async function runAnalysis(session: MeetingSession, connection: VoiceConnection) {
@@ -286,7 +350,7 @@ async function runAnalysis(session: MeetingSession, connection: VoiceConnection)
       const speakers = Object.keys(analysis.speakingTime).filter(s => s !== speaker)
       const other = speakers[0]
       const text = blopInterventionText('dominance', { speaker, minutes: String(minutes), other })
-      if (text) await blopSpeak(connection, text, session)
+      if (text) await blopSpeak(connection, text, session, 'dominance')
     }
 
   } catch (err) {
@@ -294,7 +358,33 @@ async function runAnalysis(session: MeetingSession, connection: VoiceConnection)
   }
 }
 
-async function blopSpeak(connection: VoiceConnection, text: string, session: MeetingSession) {
+async function handleMeetingRuleEvent(
+  event: MeetingRuleEvent,
+  connection: VoiceConnection,
+  session: MeetingSession
+) {
+  if (event.type === 'dominance') {
+    const other = Object.values(session.speakerNames).find(name => name !== event.speaker)
+    const text = blopInterventionText('dominance', {
+      speaker: event.speaker,
+      minutes: String(event.minutes),
+      ...(other ? { other } : {}),
+    })
+    if (text) await blopSpeak(connection, text, session, 'dominance')
+  }
+
+  if (event.type === 'silence') {
+    const text = blopInterventionText('silence', {})
+    if (text) await blopSpeak(connection, text, session, 'silence')
+  }
+}
+
+async function blopSpeak(
+  connection: VoiceConnection,
+  text: string,
+  session: MeetingSession,
+  trigger: string
+) {
   try {
     const mp3 = await synthesizeSpeech(text)
     const player = createAudioPlayer()
@@ -302,11 +392,62 @@ async function blopSpeak(connection: VoiceConnection, text: string, session: Mee
     connection.subscribe(player)
     player.play(resource)
     await new Promise<void>(resolve => player.on(AudioPlayerStatus.Idle, () => resolve()))
-    broadcast({ type: 'blop_speech', text, trigger: 'dominance' })
-    session.transcript.push({ speaker: '🎙️ Blop', text, timestamp: Date.now() })
   } catch (err) {
     // Fallback : on broadcast quand même
     console.error('TTS échoué, fallback texte :', err)
-    broadcast({ type: 'blop_speech', text, trigger: 'dominance' })
   }
+
+  broadcast({ type: 'blop_speech', text, trigger })
+  session.transcript.push({ speaker: '🎙️ Blop', text, timestamp: Date.now() })
+}
+
+async function persistCompletedSession(
+  session: MeetingSession,
+  summary: string,
+  durationMin: number
+) {
+  const transcript = session.transcript.map(s => `${s.speaker}: ${s.text}`).join('\n')
+  const totalSeconds = Object.values(session.speakerSeconds).reduce((sum, seconds) => sum + seconds, 0)
+  const speakerWrites = Object.entries(session.speakerSeconds)
+    .filter(([, seconds]) => seconds > 0)
+    .map(([userId, seconds]) => prisma.speaker.create({
+      data: {
+        meetingId: session.id,
+        discordUserId: userId,
+        name: session.speakerNames[userId] ?? userId,
+        talkSeconds: Math.round(seconds),
+        talkPercent: totalSeconds > 0 ? (seconds / totalSeconds) * 100 : 0,
+      },
+    }))
+
+  await prisma.$transaction([
+    prisma.speaker.deleteMany({ where: { meetingId: session.id } }),
+    prisma.blopState.upsert({
+      where: { meetingId: session.id },
+      create: {
+        meetingId: session.id,
+        energy: session.blopState.energy,
+        balance: session.blopState.balance,
+        focus: session.blopState.focus,
+        happiness: session.blopState.happiness,
+        level: session.blopState.level,
+        mood: session.blopState.mood,
+        reason: session.blopState.reason,
+      },
+      update: {
+        energy: session.blopState.energy,
+        balance: session.blopState.balance,
+        focus: session.blopState.focus,
+        happiness: session.blopState.happiness,
+        level: session.blopState.level,
+        mood: session.blopState.mood,
+        reason: session.blopState.reason,
+      },
+    }),
+    prisma.meeting.update({
+      where: { id: session.id },
+      data: { endedAt: new Date(), summary, durationMin, transcript },
+    }),
+    ...speakerWrites,
+  ])
 }

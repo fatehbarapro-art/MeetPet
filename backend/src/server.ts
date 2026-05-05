@@ -3,7 +3,7 @@ import express from 'express'
 import { createServer } from 'http'
 import { WebSocketServer, WebSocket } from 'ws'
 import { PrismaClient } from '@prisma/client'
-import { initDiscordBot } from './integrations/discord/discordBot.js'
+import { getActiveMeetingSession, initDiscordBot } from './integrations/discord/discordBot.js'
 
 process.on('unhandledRejection', (err) => console.error('⚠️ Unhandled rejection:', err))
 process.on('uncaughtException',  (err) => console.error('⚠️ Uncaught exception:', err))
@@ -19,6 +19,7 @@ const clients = new Set<WebSocket>()
 wss.on('connection', ws => {
   clients.add(ws)
   console.log(`WS client connecté (${clients.size} total)`)
+  sendActiveMeetingState(ws)
 
   ws.on('close', () => {
     clients.delete(ws)
@@ -34,6 +35,27 @@ wss.on('connection', ws => {
     }
   })
 })
+
+function sendActiveMeetingState(ws: WebSocket) {
+  const session = getActiveMeetingSession()
+  if (!session || ws.readyState !== WebSocket.OPEN) return
+
+  ws.send(JSON.stringify({
+    type: 'meeting_started',
+    meetingId: session.id,
+    title: session.title,
+    participants: Object.values(session.speakerNames),
+  }))
+  ws.send(JSON.stringify({ type: 'blop_update', state: session.blopState }))
+
+  if (session.activeSpeaker) {
+    ws.send(JSON.stringify({ type: 'speaker_change', current: session.activeSpeaker }))
+  }
+
+  for (const segment of session.transcript) {
+    ws.send(JSON.stringify({ type: 'transcript', ...segment }))
+  }
+}
 
 function handleWsMessage(msg: { type: string; [key: string]: unknown }) {
   switch (msg.type) {

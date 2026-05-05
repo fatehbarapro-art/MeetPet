@@ -42,12 +42,16 @@ export interface MeetingSession {
   startedAt: number
   transcript: TranscriptSegment[]
   speakerSeconds: Record<string, number>
+  speakerNames: Record<string, string>
   knownSpeakers: Set<string>
   activeSpeaker: string | null
   activeSpeakerStart: number | null
+  lastDominanceAlertAt: number | null
+  lastSilenceAlertAt: number | null
   lastSpeechAt: number
   blopState: BlopState
   analysisTimer?: ReturnType<typeof setInterval>
+  eventTimer?: ReturnType<typeof setInterval>
 }
 
 export type WsEvent =

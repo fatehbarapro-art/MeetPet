@@ -17,12 +17,12 @@ Agent vocal de réunion avec mascotte vivante **Blop**. Le bot rejoint un **voca
 
 | Champ | Valeur |
 |---|---|
-| **Statut** | 🔴 Non démarré |
+| **Statut** | 🟡 Core implémenté — validation Discord/API en cours |
 | **Contexte** | Hackathon GOSIM Paris 2026 — 24h |
 | **Sponsor sélectionné** | MiniMax (Minimax Excellence Award $2000) |
 | **Repo GitHub** | À créer |
-| **Dernière session** | 2026-05-05 — Stack finalisée, docs complètes |
-| **Prochaine étape** | Étape 1 : Scaffolding |
+| **Dernière session** | 2026-05-05 — Reprise bugs live : STT Groq + triggers Blop |
+| **Prochaine étape** | Valider BUG-002/BUG-003 en vocal Discord réel |
 
 ---
 

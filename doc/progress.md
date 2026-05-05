@@ -56,7 +56,7 @@
 - [x] `SpeakerBars.tsx` — barres de temps de parole par speaker
 - [x] `/meetpet stop` — `getVoiceConnection(guildId)?.destroy()`
 - [x] `onSpeakerStart/End` — tracking secondes de parole par userId
-- [ ] Speakers persistés en SQLite à la fin — à implémenter dans `handleStop`
+- [x] Speakers persistés en SQLite à la fin — `handleStop` écrit `Speaker.talkSeconds` + `talkPercent`
 
 ---
 
@@ -116,10 +116,10 @@
 - [x] `generateSummary()` — compte-rendu Markdown via MiniMax M2.7 en fin de réunion
 - [x] `buildSummaryEmbed()` — Embed Discord coloré selon mood Blop
 - [x] Embed posté dans le channel texte Discord à la fin
-- [ ] `MeetingSummary.tsx` — page web compte-rendu (route `/summary/:id`) — **à faire**
+- [x] `MeetingSummary.tsx` — page web compte-rendu (route `/summary/:id`)
 - [ ] DMs Discord individuels par participant — **à faire**
 - [ ] `Dashboard.tsx` — historique des réunions — **à faire**
-- [ ] Speakers persistés en SQLite dans `handleStop` — **à faire**
+- [x] Speakers persistés en SQLite dans `handleStop`
 
 ---
 
@@ -150,4 +150,12 @@
   - `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_GUILD_ID`
   - `MINIMAX_API_KEY`, `MINIMAX_GROUP_ID`
   - `GROQ_API_KEY`
-- **Reste à coder :** `MeetingSummary.tsx`, `Dashboard.tsx`, DMs Discord, speakers SQLite
+- **Reste à coder :** `Dashboard.tsx`, DMs Discord
+
+### 2026-05-05 — Session 3 : reprise bugs live
+- BUG-002 : correction du sample rate WAV Discord/Groq (`48 kHz` au lieu de `16 kHz`)
+- BUG-003 : la boucle rule-based déclenche maintenant `blopSpeak()` sur dominance/silence
+- Timers d'analyse et d'événements nettoyés à `/meetpet stop`
+- Fin de réunion : transcript, speakers et état Blop persistés en SQLite
+- TypeScript backend — `npx tsc --noEmit` ✅ 0 erreur
+- **À valider en conditions réelles :** transcription Groq et audio TTS MiniMax dans Discord
