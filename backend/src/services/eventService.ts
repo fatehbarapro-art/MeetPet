@@ -1,7 +1,7 @@
 import type { MeetingSession } from '../types/index.js'
 import { broadcast } from '../server.js'
 
-const DOMINANCE_THRESHOLD_MS = 5 * 60 * 1000   // 5 minutes
+const DOMINANCE_THRESHOLD_MS = process.env.NODE_ENV === 'development' ? 30_000 : 5 * 60 * 1000  // 30s en dev, 5min en prod
 const SILENCE_THRESHOLD_MS   = 2 * 60 * 1000   // 2 minutes
 const CHECK_INTERVAL_MS      = 15_000            // vérif toutes les 15s
 

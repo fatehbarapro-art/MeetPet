@@ -160,7 +160,7 @@ async function handleStop(interaction: ChatInputCommandInteraction) {
     data: { endedAt: new Date(), summary, durationMin },
   })
 
-  const summaryUrl = `${process.env.VITE_API_URL?.replace('/api', '')}/summary/${session.id}`
+  const summaryUrl = `${process.env.FRONTEND_URL ?? 'http://localhost:5173'}/summary/${session.id}`
   const embed = buildSummaryEmbed(session.title, durationMin, session.blopState, actions, summaryUrl)
 
   try {
@@ -212,6 +212,7 @@ function startAudioPipeline(
   receiver.speaking.on('start', (userId: string) => {
     const member = voiceChannel.members.get(userId)
     const displayName = member?.displayName ?? userId
+    console.log(`🎙️ ${displayName} commence à parler`)
 
     onSpeakerStart(userId, displayName, session)
 
@@ -231,14 +232,20 @@ function startAudioPipeline(
       onSpeakerEnd(userId, seconds, session)
 
       const pcm = Buffer.concat(chunks)
-      const { text } = await transcribeAudio(pcm, displayName)
-      if (!text) return
+      console.log(`🔊 ${displayName} — ${seconds.toFixed(1)}s de son (${pcm.length} bytes PCM)`)
 
-      const segment = { speaker: displayName, text, timestamp: Date.now() }
-      session.transcript.push(segment)
-      session.lastSpeechAt = Date.now()
+      try {
+        const { text } = await transcribeAudio(pcm, displayName)
+        console.log(`📝 Groq STT → "${text}"`)
+        if (!text) return
 
-      broadcast({ type: 'transcript', ...segment })
+        const segment = { speaker: displayName, text, timestamp: Date.now() }
+        session.transcript.push(segment)
+        session.lastSpeechAt = Date.now()
+        broadcast({ type: 'transcript', ...segment })
+      } catch (err) {
+        console.error(`❌ Groq STT erreur pour ${displayName} :`, err)
+      }
     })
   })
 }

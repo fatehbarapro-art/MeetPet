@@ -1,10 +1,23 @@
 import { useWebSocket } from './hooks/useWebSocket.ts'
 import { useMeetingStore } from './store.ts'
 import MeetingRoom from './components/MeetingRoom/MeetingRoom.tsx'
+import MeetingSummary from './components/Summary/MeetingSummary.tsx'
+
+function getRoute() {
+  const path = window.location.pathname
+  const match = path.match(/^\/summary\/(.+)$/)
+  if (match) return { page: 'summary', id: match[1] }
+  return { page: 'home', id: null }
+}
 
 export default function App() {
   useWebSocket()
-  const { isActive, title } = useMeetingStore()
+  const { isActive } = useMeetingStore()
+  const route = getRoute()
+
+  if (route.page === 'summary') {
+    return <MeetingSummary meetingId={route.id!} />
+  }
 
   return (
     <div className="min-h-screen bg-[#0f0f13] text-slate-200">
