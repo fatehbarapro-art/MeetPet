@@ -38,7 +38,7 @@
 - [x] TypeScript backend — `npx tsc --noEmit` ✅ 0 erreur
 - [x] TypeScript frontend — `npx tsc --noEmit` ✅ 0 erreur
 - [ ] GitHub repo public — à pousser (auth SSH en attente)
-- [ ] LICENSE MIT — à ajouter
+- [x] LICENSE MIT — ajoutée et pushée
 - [ ] Bot Discord connecté en ligne — clés `.env` à remplir
 - [ ] Slash commands Discord enregistrées — clés `.env` à remplir
 
@@ -126,7 +126,7 @@
 ## Étape 7 — Polish & Soumission
 
 - [ ] README.md complet (setup, usage, architecture)
-- [ ] LICENSE MIT
+- [x] LICENSE MIT
 - [ ] `.env.example` à jour — ✅ déjà fait
 - [ ] Démo vidéo 3-5 min
 - [ ] Soumission sur create.gosim.org/submit
